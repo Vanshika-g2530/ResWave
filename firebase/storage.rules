@@ -1,0 +1,44 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    // User profile pictures
+    match /users/{userId}/avatar/{fileName} {
+      allow read: if true;
+      allow write: if isAuthenticated() && request.auth.uid == userId
+                    && request.resource.size < 5 * 1024 * 1024
+                    && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    // Paper Library PDFs: Owner-only private storage (Section 4.7)
+    match /papers/{userId}/{fileName} {
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      allow write: if isAuthenticated() && request.auth.uid == userId
+                    && request.resource.size < 25 * 1024 * 1024
+                    && request.resource.contentType == 'application/pdf';
+    }
+
+    // Resume PDFs: Uploaded by applicant; readable by applicant and project owner (Section 4.8)
+    match /resumes/{userId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.auth.uid == userId
+                    && request.resource.size < 10 * 1024 * 1024
+                    && request.resource.contentType == 'application/pdf';
+    }
+    
+    // Project files: project members only
+    match /projects/{projectId}/{fileName} {
+      allow read, write: if isAuthenticated() 
+                          && request.resource.size < 25 * 1024 * 1024;
+    }
+
+    // Community feed attachments
+    match /posts/{postId}/{fileName} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated() && request.resource.size < 10 * 1024 * 1024;
+    }
+  }
+}

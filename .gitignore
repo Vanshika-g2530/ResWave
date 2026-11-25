@@ -1,0 +1,80 @@
+﻿# Environment secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+.pytest_cache/
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+build/
+.packages/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Private credentials
+*service-account*.json
+*service_account*.json
+*-private-key*.json
+*firebase-adminsdk*.json
+*adminsdk*.json
+reswave_backend/app/reswave_data_store.json
+
+# Android / Gradle generated files
+**/.gradle/
+**/build/
+**/.dart_tool/
+
+# Firebase debug logs
+firebase-debug.log
+firestore-debug.log
+*.log
+
+# Android local files
+**/local.properties
+*.hprof
+
+# Secrets
+.env
+.env.*
+!.env.example
+serviceAccountKey.json
+*service-account*.json
+*firebase-adminsdk*.json
+reswave-secrets/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Flutter generated files
+.dart_tool/
+**/build/
+reswave_backend/app/reswave_data_store.json
+
+# Files excluded from GitHub
+SPEC_COMPLIANCE.md
+
+# Files excluded from GitHub
+SPEC_COMPLIANCE.md
+
+# Local backup - do not upload
+reswave_baseline_backup.zip
+
+# Firebase configuration files
+**/google-services.json
+**/GoogleService-Info.plist

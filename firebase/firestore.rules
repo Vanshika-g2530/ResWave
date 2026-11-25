@@ -1,0 +1,631 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        (request.auth.token.get('admin', false) == true ||
+         request.auth.token.get('role', '') == 'admin');
+    }
+
+    function areConnected(userA, userB) {
+      let firstUid = userA < userB ? userA : userB;
+      let secondUid = userA < userB ? userB : userA;
+      let connectionId = 'conn-' + firstUid + '-' + secondUid;
+      let connectionPath = /databases/$(database)/documents/connections/$(connectionId);
+      return signedIn() &&
+        exists(connectionPath) &&
+        get(connectionPath).data.status == 'ACTIVE';
+    }
+
+    function isGroupMember(groupId) {
+      let membershipId = groupId + '_' + request.auth.uid;
+      let membershipPath = /databases/$(database)/documents/groupMembers/$(membershipId);
+      return signedIn() &&
+        exists(membershipPath) &&
+        get(membershipPath).data.userId == request.auth.uid &&
+        get(membershipPath).data.status == 'ACTIVE';
+    }
+
+    function isGroupOwnerOrModerator(groupId) {
+      let groupPath = /databases/$(database)/documents/groups/$(groupId);
+      return signedIn() &&
+        exists(groupPath) &&
+        (get(groupPath).data.ownerId == request.auth.uid ||
+         request.auth.uid in get(groupPath).data.get('moderators', []));
+    }
+
+    function canCreateGroupMembership(membershipId) {
+      let groupId = request.resource.data.groupId;
+      let groupPath = /databases/$(database)/documents/groups/$(groupId);
+      return membershipId == groupId + '_' + request.auth.uid &&
+        ((existsAfter(groupPath) &&
+          getAfter(groupPath).data.ownerId == request.auth.uid &&
+          request.resource.data.get('role', '') == 'Owner' &&
+          request.resource.data.get('status', '') == 'ACTIVE') ||
+         (exists(groupPath) &&
+          get(groupPath).data.get('status', 'Active') == 'Active' &&
+          get(groupPath).data.get('visibility', 'Unlisted') == 'Discoverable' &&
+          ((get(groupPath).data.get('membershipMode', 'Open') == 'Open' &&
+            request.resource.data.get('role', '') == 'Member' &&
+            request.resource.data.get('status', '') == 'ACTIVE') ||
+           (get(groupPath).data.get('membershipMode', 'Open') == 'Request to join' &&
+            request.resource.data.get('role', '') == 'Applicant' &&
+            request.resource.data.get('status', '') == 'PENDING'))));
+    }
+
+    function isProjectMember(projectId) {
+      let projectPath = /databases/$(database)/documents/projects/$(projectId);
+      return signedIn() &&
+        exists(projectPath) &&
+        (get(projectPath).data.ownerId == request.auth.uid ||
+         request.auth.uid in get(projectPath).data.get('memberIds', []));
+    }
+
+    function canReadPost(postData) {
+      return signedIn() &&
+        (isAdmin() ||
+         postData.authorId == request.auth.uid ||
+         (postData.get('audience', 'Members') == 'Members' &&
+          postData.get('groupId', null) == null &&
+          postData.get('projectId', null) == null) ||
+         (postData.get('groupId', null) != null &&
+          isGroupMember(postData.get('groupId', null))) ||
+         (postData.get('projectId', null) != null &&
+          isProjectMember(postData.get('projectId', null))));
+    }
+
+    function canReadPublication(publication) {
+      return signedIn() &&
+        (publication.userId == request.auth.uid ||
+         publication.get('visibility', 'Private') == 'Public to members' ||
+         (publication.get('visibility', 'Private') == 'Connections only' &&
+          areConnected(publication.userId, request.auth.uid)));
+    }
+
+    function canReadResearchInterest(interest) {
+      return signedIn() &&
+        (interest.userId == request.auth.uid ||
+         interest.get('visibility', 'Hidden') == 'Visible to members' ||
+         (interest.get('visibility', 'Hidden') == 'Connections only' &&
+          areConnected(interest.userId, request.auth.uid)));
+    }
+
+    function isTeamRequestOwner(requestId) {
+      let requestPath = /databases/$(database)/documents/teamRequests/$(requestId);
+      return signedIn() &&
+        exists(requestPath) &&
+        get(requestPath).data.ownerId == request.auth.uid;
+    }
+
+    function canReadConversation(conversationId) {
+      let conversationPath = /databases/$(database)/documents/conversations/$(conversationId);
+      return signedIn() &&
+        exists(conversationPath) &&
+        request.auth.uid in get(conversationPath).data.get('participants', []);
+    }
+
+    function validProfileCreate(userId) {
+      return isOwner(userId) &&
+        request.resource.data.uid == userId &&
+        request.resource.data.get('email', '') == request.auth.token.get('email', '') &&
+        request.resource.data.get('isAdmin', false) == false &&
+        request.resource.data.get('accountStatus', 'active') == 'active' &&
+        request.resource.data.get('role', '') != 'Admin' &&
+        request.resource.data.get('role', '') != 'Admin / Moderator' &&
+        request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'role', 'headline', 'bio', 'country',
+          'city', 'institution', 'department', 'visibility', 'discoverable',
+          'preferredCollaborationMode', 'emailVerified', 'isAdmin',
+          'accountStatus', 'createdAt', 'updatedAt', 'notificationPreferences',
+          'roleDetails', 'termsAccepted', 'termsAcceptedVersion', 'termsAcceptedAt'
+        ]);
+    }
+
+    function validProfileUpdate(userId) {
+      return isOwner(userId) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.email == resource.data.email &&
+        request.resource.data.get('isAdmin', false) == resource.data.get('isAdmin', false) &&
+        request.resource.data.get('accountStatus', 'active') ==
+          resource.data.get('accountStatus', 'active') &&
+        request.resource.data.get('emailVerified', false) ==
+          resource.data.get('emailVerified', false) &&
+        request.resource.data.get('role', '') != 'Admin' &&
+        request.resource.data.get('role', '') != 'Admin / Moderator' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'role', 'headline', 'bio', 'country', 'city',
+          'institution', 'department', 'visibility', 'discoverable',
+          'preferredCollaborationMode', 'notificationPreferences', 'roleDetails',
+          'updatedAt'
+        ]);
+    }
+
+    // User documents combine public and private profile fields; direct reads are owner-only.
+    // Public profile views should continue to use the filtered FastAPI endpoint.
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if validProfileCreate(userId);
+      allow update: if validProfileUpdate(userId);
+      allow delete: if false;
+    }
+
+    match /researchInterests/{interestId} {
+      allow read: if canReadResearchInterest(resource.data);
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /domains/{domainId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    match /learningResources/{resourceId} {
+      allow read: if signedIn() &&
+        (resource.data.get('status', 'Draft') == 'Published' || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /resourceProgress/{progressId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.resourceId == resource.data.resourceId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'saved', 'privateNotes', 'completedAt', 'updatedAt'
+        ]);
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /publications/{publicationId} {
+      allow read: if canReadPublication(resource.data);
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'authors', 'type', 'venue', 'year', 'doi', 'url',
+          'abstract', 'visibility'
+        ]);
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /paperLibrary/{paperId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'authors', 'doi', 'url', 'abstract', 'year', 'tags',
+          'readingStatus', 'privateNotes', 'updatedAt'
+        ]);
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /teamRequests/{requestId} {
+      allow read: if signedIn() &&
+        (resource.data.ownerId == request.auth.uid ||
+         resource.data.get('visibility', 'Unlisted') == 'Discoverable');
+      allow create: if signedIn() &&
+        request.resource.data.id == requestId &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.get('status', 'Open') == 'Open' &&
+        request.resource.data.get('visibility', 'Discoverable') in
+          ['Discoverable', 'Unlisted'];
+      allow update: if signedIn() &&
+        resource.data.ownerId == request.auth.uid &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'primaryDomain', 'relatedDomains', 'topics',
+          'skillsNeeded', 'rolesNeeded', 'membersNeeded', 'remainingCapacity',
+          'experiencePref', 'commitment', 'mode', 'location', 'startDate',
+          'applicationQuestions', 'visibility', 'status', 'updatedAt'
+        ]) &&
+        request.resource.data.get('remainingCapacity', 0) >= 0 &&
+        request.resource.data.get('remainingCapacity', 0) <=
+          request.resource.data.get('membersNeeded', 0);
+      allow delete: if false;
+    }
+
+    match /teamApplications/{applicationId} {
+      allow read: if signedIn() &&
+        (resource.data.applicantId == request.auth.uid ||
+         isTeamRequestOwner(resource.data.requestId) ||
+         isAdmin());
+      allow create: if signedIn() &&
+        request.resource.data.id == applicationId &&
+        request.resource.data.applicantId == request.auth.uid &&
+        request.resource.data.get('status', 'Pending') == 'Pending' &&
+        exists(/databases/$(database)/documents/teamRequests/$(request.resource.data.requestId)) &&
+        get(/databases/$(database)/documents/teamRequests/$(request.resource.data.requestId)).data.ownerId != request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /projects/{projectId} {
+      allow read: if isProjectMember(projectId);
+      allow create: if signedIn() &&
+        request.resource.data.id == projectId &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.get('memberIds', []).hasOnly([request.auth.uid]) &&
+        request.resource.data.get('memberIds', []).hasAll([request.auth.uid]);
+      allow update: if signedIn() &&
+        resource.data.ownerId == request.auth.uid &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.memberIds == resource.data.memberIds &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'domainTags', 'status', 'startDate', 'targetDate'
+        ]);
+      allow delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow read: if isProjectMember(resource.data.projectId);
+      allow create: if signedIn() &&
+        isProjectMember(request.resource.data.projectId) &&
+        request.resource.data.id == taskId &&
+        (request.resource.data.get('assigneeId', request.auth.uid) == null ||
+         request.resource.data.get('assigneeId', request.auth.uid) in
+           get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)).data.get('memberIds', [])) &&
+        request.resource.data.keys().hasOnly([
+          'id', 'projectId', 'title', 'description', 'assigneeId', 'assigneeName',
+          'priority', 'dueDate', 'status', 'createdAt'
+        ]);
+      allow update: if signedIn() &&
+        isProjectMember(resource.data.projectId) &&
+        request.resource.data.projectId == resource.data.projectId &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'assigneeId', 'assigneeName', 'priority',
+          'dueDate', 'status', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /milestones/{milestoneId} {
+      allow read: if isProjectMember(resource.data.projectId);
+      allow create: if signedIn() &&
+        isProjectMember(request.resource.data.projectId) &&
+        request.resource.data.id == milestoneId &&
+        get(/databases/$(database)/documents/projects/$(request.resource.data.projectId)).data
+          .get('memberIds', [])
+          .hasAll(request.resource.data.get('assignedMembers', [])) &&
+        request.resource.data.keys().hasOnly([
+          'id', 'projectId', 'title', 'description', 'dueDate',
+          'assignedMembers', 'status', 'createdAt'
+        ]);
+      allow update: if signedIn() &&
+        isProjectMember(resource.data.projectId) &&
+        request.resource.data.projectId == resource.data.projectId &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'dueDate', 'assignedMembers', 'status'
+        ]) &&
+        get(/databases/$(database)/documents/projects/$(resource.data.projectId)).data
+          .get('memberIds', [])
+          .hasAll(request.resource.data.get('assignedMembers', []));
+      allow delete: if false;
+    }
+
+    match /mentorProfiles/{userId} {
+      allow read: if signedIn() &&
+        (resource.data.userId == request.auth.uid ||
+         resource.data.get('visibility', 'Private') == 'Public to members');
+      allow create: if isOwner(userId) &&
+        request.resource.data.userId == userId &&
+        request.resource.data.get('activeMenteesCount', 0) == 0;
+      allow update: if isOwner(userId) &&
+        resource.data.userId == userId &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.get('activeMenteesCount', 0) ==
+          resource.data.get('activeMenteesCount', 0) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'mentorshipEnabled', 'expertiseTags', 'helpTypes', 'menteeLevels',
+          'formats', 'availability', 'maxCapacity', 'preferredFrequency',
+          'timezone', 'visibility'
+        ]);
+      allow delete: if isOwner(userId);
+    }
+
+    match /mentorQuestionnaires/{userId} {
+      allow read: if isOwner(userId) &&
+        resource.data.userId == userId;
+      allow create, update: if isOwner(userId) &&
+        request.resource.data.userId == userId &&
+        request.resource.data.keys().hasOnly(['userId', 'answers', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /mentorRequests/{requestId} {
+      allow read: if signedIn() &&
+        (resource.data.menteeId == request.auth.uid ||
+         resource.data.mentorId == request.auth.uid);
+      allow create: if signedIn() &&
+        request.resource.data.id == requestId &&
+        request.resource.data.menteeId == request.auth.uid &&
+        request.resource.data.mentorId != request.auth.uid &&
+        request.resource.data.get('status', 'Pending') == 'Pending';
+      allow update, delete: if false;
+    }
+
+    match /groups/{groupId} {
+      allow read: if signedIn() &&
+        (resource.data.ownerId == request.auth.uid ||
+         isGroupMember(groupId) ||
+         (resource.data.get('visibility', 'Unlisted') == 'Discoverable' &&
+          resource.data.get('status', 'Active') == 'Active'));
+      allow create: if signedIn() &&
+        request.resource.data.id == groupId &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.get('moderators', []).hasOnly([request.auth.uid]) &&
+        request.resource.data.get('moderators', []).hasAll([request.auth.uid]) &&
+        request.resource.data.get('status', 'Active') == 'Active';
+      allow update: if signedIn() &&
+        resource.data.ownerId == request.auth.uid &&
+        request.resource.data.ownerId == resource.data.ownerId &&
+        request.resource.data.get('moderators', []) == resource.data.get('moderators', []) &&
+        request.resource.data.get('memberCount', 0) == resource.data.get('memberCount', 0) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'description', 'primaryDomain', 'topics', 'purpose',
+          'membershipMode', 'visibility', 'rules', 'coverImageUrl', 'status'
+        ]);
+      allow delete: if false;
+    }
+
+    match /groupMembers/{membershipId} {
+      allow read: if signedIn() &&
+        (resource.data.userId == request.auth.uid ||
+         isGroupOwnerOrModerator(resource.data.groupId));
+      allow create: if signedIn() &&
+        request.resource.data.id == membershipId &&
+        request.resource.data.userId == request.auth.uid &&
+        canCreateGroupMembership(membershipId);
+      allow update: if isGroupOwnerOrModerator(resource.data.groupId) &&
+        request.resource.data.groupId == resource.data.groupId &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'status']);
+      allow delete: if false;
+    }
+
+    match /posts/{postId} {
+      allow read: if canReadPost(resource.data);
+      allow create: if signedIn() &&
+        request.resource.data.id == postId &&
+        request.resource.data.authorId == request.auth.uid &&
+        ((request.resource.data.get('groupId', null) == null &&
+          request.resource.data.get('projectId', null) == null &&
+          request.resource.data.get('audience', 'Members') == 'Members') ||
+         (request.resource.data.get('groupId', null) != null &&
+          isGroupMember(request.resource.data.get('groupId', null))) ||
+         (request.resource.data.get('projectId', null) != null &&
+          isProjectMember(request.resource.data.get('projectId', null))) ||
+         isAdmin());
+      allow update: if signedIn() &&
+        resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'text', 'postType', 'domainTags', 'attachmentUrl', 'audience',
+          'commentsEnabled', 'updatedAt'
+        ]);
+      allow delete: if signedIn() &&
+        (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /comments/{commentId} {
+      allow read: if exists(/databases/$(database)/documents/posts/$(resource.data.postId)) &&
+        canReadPost(get(/databases/$(database)/documents/posts/$(resource.data.postId)).data);
+      allow create: if signedIn() &&
+        request.resource.data.id == commentId &&
+        request.resource.data.authorId == request.auth.uid &&
+        exists(/databases/$(database)/documents/posts/$(request.resource.data.postId)) &&
+        get(/databases/$(database)/documents/posts/$(request.resource.data.postId)).data.get('commentsEnabled', true) == true &&
+        canReadPost(get(/databases/$(database)/documents/posts/$(request.resource.data.postId)).data);
+      allow update: if signedIn() &&
+        resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        request.resource.data.postId == resource.data.postId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text']);
+      allow delete: if signedIn() &&
+        (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /postReactions/{reactionId} {
+      allow read: if signedIn() &&
+        (resource.data.userId == request.auth.uid ||
+         canReadPost(get(/databases/$(database)/documents/posts/$(resource.data.postId)).data));
+      allow create: if signedIn() &&
+        request.resource.data.id == reactionId &&
+        request.resource.data.userId == request.auth.uid &&
+        exists(/databases/$(database)/documents/posts/$(request.resource.data.postId)) &&
+        canReadPost(get(/databases/$(database)/documents/posts/$(request.resource.data.postId)).data);
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /connections/{connectionId} {
+      allow read: if signedIn() &&
+        (resource.data.get('userA', '') == request.auth.uid ||
+         resource.data.get('userB', '') == request.auth.uid);
+      allow write: if false;
+    }
+
+    match /connectionRequests/{requestId} {
+      allow read: if signedIn() &&
+        (resource.data.senderId == request.auth.uid ||
+         resource.data.receiverId == request.auth.uid);
+      allow create: if signedIn() &&
+        request.resource.data.id == requestId &&
+        request.resource.data.senderId == request.auth.uid &&
+        request.resource.data.receiverId != request.auth.uid &&
+        request.resource.data.get('status', 'PENDING') == 'PENDING' &&
+        exists(/databases/$(database)/documents/users/$(request.resource.data.receiverId));
+      allow update, delete: if false;
+    }
+
+    match /follows/{followId} {
+      allow read: if signedIn() &&
+        (resource.data.followerId == request.auth.uid ||
+         resource.data.targetId == request.auth.uid);
+      allow create: if signedIn() &&
+        request.resource.data.id == followId &&
+        request.resource.data.followerId == request.auth.uid &&
+        request.resource.data.targetId != request.auth.uid &&
+        exists(/databases/$(database)/documents/users/$(request.resource.data.targetId)) &&
+        get(/databases/$(database)/documents/users/$(request.resource.data.targetId)).data.get('discoverable', false) == true;
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.followerId == request.auth.uid;
+    }
+
+    match /conversations/{conversationId} {
+      allow read: if canReadConversation(conversationId);
+      allow create: if signedIn() &&
+        request.resource.data.id == conversationId &&
+        request.resource.data.get('participants', []).size() == 2 &&
+        request.auth.uid in request.resource.data.participants &&
+        areConnected(
+          request.auth.uid,
+          request.resource.data.participants[0] == request.auth.uid
+            ? request.resource.data.participants[1]
+            : request.resource.data.participants[0]
+        );
+      allow update: if canReadConversation(conversationId) &&
+        request.resource.data.participants == resource.data.participants &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'lastMessage', 'lastMessageTime'
+        ]);
+      allow delete: if false;
+    }
+
+    match /messages/{messageId} {
+      allow read: if canReadConversation(resource.data.conversationId);
+      allow create: if signedIn() &&
+        request.resource.data.id == messageId &&
+        request.resource.data.senderId == request.auth.uid &&
+        canReadConversation(request.resource.data.conversationId);
+      allow update: if signedIn() &&
+        canReadConversation(resource.data.conversationId) &&
+        resource.data.senderId != request.auth.uid &&
+        request.resource.data.senderId == resource.data.senderId &&
+        request.resource.data.conversationId == resource.data.conversationId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+        request.resource.data.read == true;
+      allow delete: if false;
+    }
+
+    match /moodEntries/{entryId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.id == entryId &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId &&
+        request.resource.data.id == resource.data.id &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'mood', 'factors', 'intensity', 'helpfulAction', 'privateNote'
+        ]);
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /supportPosts/{postId} {
+      allow read: if signedIn() &&
+        (resource.data.authorId == request.auth.uid ||
+         isAdmin() ||
+         (resource.data.get('displayMode', 'Show profile name') == 'Show profile name' &&
+          (resource.data.get('groupId', null) == null ||
+           isGroupMember(resource.data.get('groupId', null)))));
+      allow create: if signedIn() &&
+        request.resource.data.id == postId &&
+        request.resource.data.authorId == request.auth.uid &&
+        request.resource.data.get('safetyAcknowledged', false) == true &&
+        (request.resource.data.get('groupId', null) == null ||
+         isGroupMember(request.resource.data.get('groupId', null)));
+      allow update: if signedIn() &&
+        resource.data.authorId == request.auth.uid &&
+        request.resource.data.authorId == resource.data.authorId &&
+        request.resource.data.groupId == resource.data.groupId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'category', 'text', 'displayMode', 'commentsEnabled'
+        ]);
+      allow delete: if signedIn() &&
+        (resource.data.authorId == request.auth.uid || isAdmin());
+    }
+
+    match /opportunities/{opportunityId} {
+      allow read: if signedIn() &&
+        (resource.data.get('status', 'Draft') == 'Published' || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /savedItems/{savedItemId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create: if signedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.userId == request.auth.uid &&
+        request.resource.data.userId == resource.data.userId;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && resource.data.recipientId == request.auth.uid;
+      allow update: if signedIn() &&
+        resource.data.recipientId == request.auth.uid &&
+        request.resource.data.recipientId == resource.data.recipientId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']) &&
+        request.resource.data.read == true;
+      allow create, delete: if false;
+    }
+
+    match /fcmTokens/{userId} {
+      allow read: if isOwner(userId) && resource.data.userId == userId;
+      allow create, update: if isOwner(userId) &&
+        request.resource.data.userId == userId &&
+        request.resource.data.keys().hasOnly(['userId', 'token', 'deviceInfo', 'updatedAt']);
+      allow delete: if isOwner(userId) && resource.data.userId == userId;
+    }
+
+    match /reports/{reportId} {
+      allow create: if signedIn() &&
+        request.resource.data.id == reportId &&
+        request.resource.data.reporterId == request.auth.uid &&
+        request.resource.data.get('status', 'Under Review') == 'Under Review';
+      allow read: if isAdmin();
+      allow update: if isAdmin() &&
+        request.resource.data.reporterId == resource.data.reporterId &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'actionTaken', 'assignedModerator', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    match /adminAuditLogs/{logId} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // All collections not explicitly listed above are inaccessible to clients.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
